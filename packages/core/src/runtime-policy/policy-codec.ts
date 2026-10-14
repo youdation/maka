@@ -19,12 +19,17 @@
 
 import { isThinkingLevel } from '../model-thinking.js';
 import { CHAT_DEFAULT_PERMISSION_MODES } from '../settings.js';
-import { normalizeSubagentSettings } from '../subagent-settings.js';
+import {
+  isSafeSubagentPresetId,
+  normalizeSubagentSettings,
+  type SubagentPreset,
+} from '../subagent-settings.js';
 import type {
   AgentRuntimeSettingsPatch,
   MutateRuntimePolicyInput,
   NetworkProxyCredentialUpdate,
   NetworkProxyCredentialTarget,
+  PatchSubagentPresetsMutation,
   RuntimePolicy,
   RuntimePolicyMutation,
   UpdateNetworkProxyInput,
@@ -258,6 +263,8 @@ function normalizeMutationOperation(operation: Record<string, unknown>): Runtime
       return { kind: operation.kind, value: normalizeWebSearch(operation.value) };
     case 'set_subagents':
       return { kind: operation.kind, value: normalizeSubagentSettings(operation.value) };
+    case 'patch_subagent_presets':
+      return { kind: operation.kind, value: normalizePatchSubagentPresetsOperation(operation.value) };
     case 'set_external_agents':
       return { kind: operation.kind, value: normalizeExternalAgents(operation.value) };
     case 'set_shell':
@@ -282,6 +289,50 @@ function normalizeShell(value: unknown): RuntimePolicy['shell'] {
     throw domainError('Git Bash executable must not be empty');
   }
   return { preference: item.preference, executable };
+}
+
+/**
+ * Normalize one preset-scoped subagent write.
+ *
+ * A preset that normalization would change is REJECTED rather than repaired.
+ * `set_subagents` silently drops a bad preset and truncates a long description;
+ * for a single-preset write that would report success while writing something
+ * else, so the editor has to send a preset it already clamped. `applyMutation`
+ * (storage) owns the one rule this layer cannot check: the list length.
+ */
+function normalizePatchSubagentPresetsOperation(
+  value: unknown,
+): PatchSubagentPresetsMutation['value'] {
+  // Both keys are allowed and neither is required up front: the `op`
+  // discriminator decides which one has to be present, and the branch below
+  // re-checks the shape so `{ op: 'delete', preset: … }` is a rejection.
+  const operation = exactRecord(
+    value,
+    'patch subagent presets operation',
+    ['op', 'preset', 'presetId'],
+    [],
+  );
+  if (operation.op === 'upsert') {
+    exactRecord(value, 'patch subagent presets upsert', ['op', 'preset']);
+    return { op: 'upsert', preset: normalizePresetWrite(operation.preset) };
+  }
+  if (operation.op === 'delete') {
+    exactRecord(value, 'patch subagent presets delete', ['op', 'presetId']);
+    if (!isSafeSubagentPresetId(operation.presetId)) {
+      throw domainError('patch subagent presets presetId must be a safe subagent preset id');
+    }
+    return { op: 'delete', presetId: operation.presetId };
+  }
+  throw domainError(
+    `patch subagent presets operation '${String(operation.op)}' is not upsert or delete`,
+  );
+}
+
+function normalizePresetWrite(value: unknown): SubagentPreset {
+  const preset = normalizeSubagentSettings({ presets: [value] }).presets[0];
+  if (!preset) throw domainError('subagent preset write must be a valid subagent preset');
+  assertCanonicalValue(value, preset, 'subagent preset write');
+  return preset;
 }
 
 function normalizeAgentRuntimeSettingsPatch(value: unknown): AgentRuntimeSettingsPatch {

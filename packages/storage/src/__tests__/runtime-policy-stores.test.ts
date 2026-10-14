@@ -5149,3 +5149,116 @@ test('Jev policy and credentials persist in Host stores without exposing the key
     assert.equal(await stores.operations.exportCredentialMaterial(locator), null);
   });
 });
+
+test('patch_subagent_presets writes one preset without clobbering its neighbours', async () => {
+  await withInteractiveOwner(async ({ stores }) => {
+    const reader = await stores.runtimePolicy.getSnapshot();
+    const first = await stores.runtimePolicy.mutate({
+      expectedRevision: reader.revision,
+      operation: {
+        kind: 'patch_subagent_presets',
+        value: { op: 'upsert', preset: subagentPresetForTest('first') },
+      },
+    });
+    assert.equal(first.kind, 'committed');
+    const second = await stores.runtimePolicy.mutate({
+      expectedRevision: reader.revision + 1,
+      operation: {
+        kind: 'patch_subagent_presets',
+        value: { op: 'upsert', preset: subagentPresetForTest('second') },
+      },
+    });
+    assert.equal(second.kind, 'committed');
+
+    // The second write carried only its own preset: the first one survives,
+    // which is exactly what `set_subagents` cannot promise.
+    assert.deepEqual(
+      (await stores.runtimePolicy.getSnapshot()).policy.subagents.presets.map(
+        (preset) => preset.id,
+      ),
+      ['first', 'second'],
+    );
+
+    const replaced = await stores.runtimePolicy.mutate({
+      expectedRevision: reader.revision + 2,
+      operation: {
+        kind: 'patch_subagent_presets',
+        value: { op: 'upsert', preset: subagentPresetForTest('first', 'reviewer-next') },
+      },
+    });
+    assert.equal(replaced.kind, 'committed');
+    assert.deepEqual(
+      (await stores.runtimePolicy.getSnapshot()).policy.subagents.presets.map(
+        (preset) => preset.id,
+      ),
+      ['first', 'second'],
+    );
+
+    const removed = await stores.runtimePolicy.mutate({
+      expectedRevision: reader.revision + 3,
+      operation: { kind: 'patch_subagent_presets', value: { op: 'delete', presetId: 'first' } },
+    });
+    assert.equal(removed.kind, 'committed');
+    assert.deepEqual(
+      (await stores.runtimePolicy.getSnapshot()).policy.subagents.presets.map(
+        (preset) => preset.id,
+      ),
+      ['second'],
+    );
+
+    // Deleting what is already gone is a no-op, not a conflict.
+    const again = await stores.runtimePolicy.mutate({
+      expectedRevision: reader.revision + 4,
+      operation: { kind: 'patch_subagent_presets', value: { op: 'delete', presetId: 'first' } },
+    });
+    assert.equal(again.kind, 'committed');
+    assert.deepEqual(
+      (await stores.runtimePolicy.getSnapshot()).policy.subagents.presets.map(
+        (preset) => preset.id,
+      ),
+      ['second'],
+    );
+  });
+});
+
+test('patch_subagent_presets refuses a preset beyond the stored list limit', async () => {
+  await withInteractiveOwner(async ({ stores }) => {
+    let revision = (await stores.runtimePolicy.getSnapshot()).revision;
+    const total = MAX_SUBAGENT_PRESETS + 1;
+    for (let index = 0; index < total; index += 1) {
+      const attempt = stores.runtimePolicy.mutate({
+        expectedRevision: revision,
+        operation: {
+          kind: 'patch_subagent_presets',
+          value: { op: 'upsert', preset: subagentPresetForTest(`preset-${index}`) },
+        },
+      });
+      if (index < MAX_SUBAGENT_PRESETS) {
+        assert.equal((await attempt).kind, 'committed');
+        revision += 1;
+        continue;
+      }
+      // The list ceiling lives in storage because it is a property of the
+      // stored list, not of one preset. Without it the extra preset would be
+      // written and then silently dropped by the next decode.
+      await assert.rejects(attempt, RuntimePolicyStoreError);
+    }
+    assert.equal(
+      (await stores.runtimePolicy.getSnapshot()).policy.subagents.presets.length,
+      MAX_SUBAGENT_PRESETS,
+    );
+  });
+});
+
+function subagentPresetForTest(id: string, name = id) {
+  return {
+    id,
+    name,
+    description: `${name} role`,
+    profile: 'local_read' as const,
+    connectionSlug: 'openai-main',
+    model: 'gpt-5-mini',
+    instructions: { responsibilities: `Act as the ${name} role.` },
+    enabled: true,
+  };
+}

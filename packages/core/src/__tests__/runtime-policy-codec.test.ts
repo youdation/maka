@@ -661,3 +661,97 @@ test('Jev is an optional strict policy field and has a dedicated credential scop
     RuntimePolicyDomainDecodeError,
   );
 });
+
+test('patch_subagent_presets upserts one preset and keeps instructions canonical', () => {
+  const preset = {
+    id: 'reviewer',
+    name: 'Reviewer',
+    description: 'Reads diffs',
+    profile: 'local_read' as const,
+    connectionSlug: 'openai-main',
+    model: 'gpt-5-mini',
+    instructions: {
+      responsibilities: 'Review diffs for correctness.',
+      procedure: 'Read the diff, then the tests.',
+      acceptanceCriteria: 'Every finding names a file and a line.',
+    },
+    enabled: true,
+  };
+
+  assert.deepEqual(
+    normalizeRuntimePolicyMutation({
+      expectedRevision: 4,
+      operation: { kind: 'patch_subagent_presets', value: { op: 'upsert', preset } },
+    }),
+    {
+      expectedRevision: 4,
+      operation: { kind: 'patch_subagent_presets', value: { op: 'upsert', preset } },
+    },
+  );
+
+  const policy = { ...createDefaultRuntimePolicy(), subagents: { presets: [preset] } };
+  assert.deepEqual(decodeCanonicalRuntimePolicy(policy).subagents.presets, [preset]);
+});
+
+test('patch_subagent_presets rejects a preset that normalization would repair', () => {
+  const preset = {
+    id: 'reviewer',
+    name: 'Reviewer',
+    description: 'Reads diffs',
+    profile: 'local_read' as const,
+    connectionSlug: 'openai-main',
+    model: 'gpt-5-mini',
+    enabled: true,
+  };
+  const patch = (value: unknown) =>
+    normalizeRuntimePolicyMutation({
+      expectedRevision: 0,
+      operation: { kind: 'patch_subagent_presets', value: { op: 'upsert', preset: value } },
+    });
+
+  // Unknown keys and untrimmed text both mean the writer sent a document the
+  // store would have changed quietly, so the write is refused instead.
+  assert.throws(() => patch({ ...preset, surprise: 'value' }), RuntimePolicyDomainDecodeError);
+  assert.throws(
+    () => patch({ ...preset, name: ' Reviewer ' }),
+    RuntimePolicyDomainDecodeError,
+  );
+  assert.throws(
+    () => patch({ ...preset, instructions: { responsibilities: 'pad me'.padEnd(9_000, '!') } }),
+    RuntimePolicyDomainDecodeError,
+  );
+  // An invalid preset is refused outright, never silently dropped.
+  assert.throws(
+    () => patch({ ...preset, profile: 'root' }),
+    RuntimePolicyDomainDecodeError,
+  );
+});
+
+test('patch_subagent_presets deletes by id and rejects malformed operations', () => {
+  assert.deepEqual(
+    normalizeRuntimePolicyMutation({
+      expectedRevision: 1,
+      operation: { kind: 'patch_subagent_presets', value: { op: 'delete', presetId: 'reviewer' } },
+    }),
+    {
+      expectedRevision: 1,
+      operation: { kind: 'patch_subagent_presets', value: { op: 'delete', presetId: 'reviewer' } },
+    },
+  );
+
+  const malformed = (value: unknown) =>
+    normalizeRuntimePolicyMutation({
+      expectedRevision: 0,
+      operation: { kind: 'patch_subagent_presets', value },
+    });
+
+  assert.throws(() => malformed({ op: 'remove', presetId: 'reviewer' }), RuntimePolicyDomainDecodeError);
+  assert.throws(() => malformed({ op: 'delete', presetId: 'unsafe id' }), RuntimePolicyDomainDecodeError);
+  // The two shapes are disjoint: a delete never carries a preset, and the
+  // upsert form always carries one.
+  assert.throws(
+    () => malformed({ op: 'delete', presetId: 'reviewer', preset: { id: 'reviewer' } }),
+    RuntimePolicyDomainDecodeError,
+  );
+  assert.throws(() => malformed({ op: 'upsert' }), RuntimePolicyDomainDecodeError);
+});

@@ -33,7 +33,7 @@ import {
   type ProxyProtocol,
   type ShellSettings,
 } from './settings.js';
-import type { SubagentSettings } from './subagent-settings.js';
+import type { SubagentPreset, SubagentSettings } from './subagent-settings.js';
 import type { JsonObject } from './request-customization.js';
 import {
   WEB_SEARCH_PROVIDERS,
@@ -183,6 +183,21 @@ export interface AgentRuntimeSettingsPatch {
   readonly webSearch?: Pick<Partial<RuntimePolicy['webSearch']>, 'enabled'>;
 }
 
+/**
+ * One preset-scoped write to `RuntimePolicy.subagents`.
+ *
+ * `set_subagents` replaces the whole array, so two writers (the Desktop editor
+ * and a conversation tool) silently clobber each other. This mutation carries
+ * exactly one preset, which is what lets both entry points write through the
+ * same rules without a read-modify-write of the list.
+ */
+export interface PatchSubagentPresetsMutation {
+  readonly kind: 'patch_subagent_presets';
+  readonly value:
+    | { readonly op: 'upsert'; readonly preset: SubagentPreset }
+    | { readonly op: 'delete'; readonly presetId: string };
+}
+
 export type RuntimePolicyMutation =
   | { readonly kind: 'set_jev'; readonly value: { readonly enabled: boolean } }
   | { readonly kind: 'set_network_proxy'; readonly value: RuntimePolicy['networkProxy'] }
@@ -196,6 +211,7 @@ export type RuntimePolicyMutation =
   | { readonly kind: 'set_chat_defaults'; readonly value: RuntimePolicy['chatDefaults'] }
   | { readonly kind: 'set_web_search'; readonly value: RuntimePolicy['webSearch'] }
   | { readonly kind: 'set_subagents'; readonly value: RuntimePolicy['subagents'] }
+  | PatchSubagentPresetsMutation
   | { readonly kind: 'set_external_agents'; readonly value: RuntimePolicy['externalAgents'] }
   | { readonly kind: 'set_shell'; readonly value: RuntimePolicy['shell'] }
   | { readonly kind: 'patch_agent_settings'; readonly value: AgentRuntimeSettingsPatch };

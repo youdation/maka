@@ -25,10 +25,12 @@ import {
   normalizeRuntimePolicyMutation,
   type MutateRuntimePolicyInput,
   type MutateRuntimePolicyResult,
+  type PatchSubagentPresetsMutation,
   type RuntimePolicy,
   type RuntimePolicyMutation,
   type RuntimePolicySnapshot,
 } from '@maka/core/runtime-policy';
+import { MAX_SUBAGENT_PRESETS } from '@maka/core/subagent-settings';
 import { deepFreeze, nextRevision, record, revision } from './codec.js';
 import {
   codecError,
@@ -160,6 +162,8 @@ function applyMutation(policy: RuntimePolicy, operation: RuntimePolicyMutation):
       return { ...policy, webSearch: operation.value };
     case 'set_subagents':
       return { ...policy, subagents: operation.value };
+    case 'patch_subagent_presets':
+      return { ...policy, subagents: applyPresetPatch(policy.subagents, operation.value) };
     case 'set_external_agents':
       return { ...policy, externalAgents: operation.value };
     case 'set_shell':
@@ -189,4 +193,36 @@ function applyMutation(policy: RuntimePolicy, operation: RuntimePolicyMutation):
           : {}),
       };
   }
+}
+
+/**
+ * Apply one preset-scoped write to the stored list.
+ *
+ * The codec normalizes the single preset but cannot see the list, so the
+ * `MAX_SUBAGENT_PRESETS` ceiling is enforced here: without it an upsert could
+ * append a 65th preset that the next `normalizeSubagentSettings` would silently
+ * drop, leaving the in-memory policy and the decoded document disagreeing.
+ */
+function applyPresetPatch(
+  settings: RuntimePolicy['subagents'],
+  operation: PatchSubagentPresetsMutation['value'],
+): RuntimePolicy['subagents'] {
+  if (operation.op === 'delete') {
+    return { presets: settings.presets.filter((preset) => preset.id !== operation.presetId) };
+  }
+  const index = settings.presets.findIndex((preset) => preset.id === operation.preset.id);
+  if (index >= 0) {
+    return {
+      presets: settings.presets.map((preset, current) =>
+        current === index ? operation.preset : preset,
+      ),
+    };
+  }
+  if (settings.presets.length >= MAX_SUBAGENT_PRESETS) {
+    throw codecError(
+      'invalid_policy_input',
+      `subagent presets are limited to ${MAX_SUBAGENT_PRESETS}`,
+    );
+  }
+  return { presets: [...settings.presets, operation.preset] };
 }
