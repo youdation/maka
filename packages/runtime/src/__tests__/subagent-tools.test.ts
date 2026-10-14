@@ -1026,6 +1026,10 @@ describe('subagent tools', () => {
               profile: LOCAL_READ_AGENT_PROFILE,
               model: 'deepseek-v4-flash',
               thinkingLevel: 'low',
+              // Never projected: role instructions belong to the child's prompt,
+              // and repeating them here would spend the parent's context on every
+              // catalog read. The equality assertion below is what holds that.
+              instructions: { responsibilities: 'Scan the repository cheaply.' },
               availability: { status: 'available' },
             },
           ],
@@ -1375,5 +1379,122 @@ function testConnection(): LlmConnection {
     enabled: true,
     createdAt: 1,
     updatedAt: 1,
+  };
+}
+
+test('agent_list never carries role instructions into the parent context', async () => {
+  const secret = 'INTERNAL-ROLE-TEXT-DO-NOT-PROJECT';
+  const listTool = buildSubagentListTool();
+  const result = await listTool.impl(
+    { view: 'catalog' },
+    {
+      sessionId: 'session-1',
+      turnId: 'parent-turn',
+      cwd: '/tmp/cwd',
+      toolCallId: 'tool-list-instructions',
+      abortSignal: new AbortController().signal,
+      emitOutput: () => {},
+      listChildAgents: async () => ({
+        definitions: [availableLocalReadDefinition()],
+        presets: [
+          {
+            id: 'reviewer',
+            name: 'Reviewer',
+            description: 'Reviews diffs.',
+            profile: LOCAL_READ_AGENT_PROFILE,
+            model: 'deepseek-v4-flash',
+            instructions: {
+              responsibilities: secret,
+              procedure: secret,
+              constraints: secret,
+              outputFormat: secret,
+              acceptanceCriteria: secret,
+            },
+            availability: { status: 'available' },
+          },
+        ],
+      }),
+    },
+  );
+
+  // A whole-field leak is the failure mode worth pinning: the projected row is
+  // selected by `subagent_id`, and `description` is the only prose the parent
+  // needs to choose a preset.
+  const serialized = JSON.stringify(result);
+  assert.strictEqual(serialized.includes(secret), false);
+  assert.deepStrictEqual(Object.keys((result as { presets: object[] }).presets[0]!), [
+    'subagent_id',
+    'spawn_args',
+    'name',
+    'description',
+    'profile',
+    'model',
+    'status',
+  ]);
+});
+
+test('agent_spawn hands the selected preset to the host without restating its instructions', async () => {
+  const spawns: unknown[] = [];
+  const spawnTool = buildSubagentSpawnTool();
+  await spawnTool.impl(
+    { target_kind: 'preset', subagent_id: 'reviewer', task: 'review the diff' },
+    {
+      sessionId: 'session-1',
+      turnId: 'parent-turn',
+      cwd: '/tmp/cwd',
+      toolCallId: 'tool-spawn-preset',
+      abortSignal: new AbortController().signal,
+      emitOutput: () => {},
+      listChildAgents: async () => ({
+        definitions: [availableLocalReadDefinition()],
+        presets: [
+          {
+            id: 'reviewer',
+            name: 'Reviewer',
+            description: 'Reviews diffs.',
+            profile: LOCAL_READ_AGENT_PROFILE,
+            model: 'deepseek-v4-flash',
+            availability: { status: 'available' },
+          },
+        ],
+      }),
+      spawnChildSession: async (input) => {
+        spawns.push(input);
+        return {
+          childSessionId: 'child-session',
+          agentId: LOCAL_READ_AGENT_ID,
+          agentName: 'Reviewer',
+          turnId: 'child-turn',
+          runId: 'child-run',
+          profile: LOCAL_READ_AGENT_PROFILE,
+          status: 'completed',
+          permissionMode: 'explore',
+          summary: 'done',
+          artifactIds: [],
+        };
+      },
+    },
+  );
+
+  // The preset travels as an ID: the runtime resolves it again on the spawn
+  // path, so the prompt text is never passed through the model's tool call and
+  // cannot be edited in transit.
+  assert.strictEqual(spawns.length, 1);
+  const spawn = spawns[0] as { agentProfile: string; subagentId?: string; prompt: string };
+  assert.strictEqual(spawn.subagentId, 'reviewer');
+  assert.strictEqual(spawn.agentProfile, LOCAL_READ_AGENT_PROFILE);
+  assert.strictEqual(spawn.prompt, 'review the diff');
+  assert.strictEqual(Object.hasOwn(spawn, 'instructions'), false);
+});
+
+/** The catalog row a runnable preset needs so agent_list can offer spawn_args. */
+function availableLocalReadDefinition() {
+  return {
+    id: LOCAL_READ_AGENT_ID,
+    profile: LOCAL_READ_AGENT_PROFILE,
+    name: 'Local Read',
+    description: 'Read-only repository exploration.',
+    contract: { workspace: 'same_workspace', defaultWriteBack: 'summary' },
+    availability: { status: 'available' },
   };
 }

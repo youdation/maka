@@ -19,6 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { SUBAGENT_PRESET_INSTRUCTION_MAX_CHARS } from '@maka/core/subagent-settings';
 import {
   buildAgentSystemPrompt,
   IMPLEMENTATION_AGENT_DEFINITION,
@@ -119,4 +120,12 @@ test('leaves the definition and the instructions untouched', () => {
       IMPLEMENTATION_AGENT_DEFINITION.systemPrompt,
     ),
   );
+});
+test('a field at the store cap is rendered in full, without a second truncation', () => {
+  // If composition truncated independently of the store, two presets could
+  // round-trip to the same stored value but still produce different prompts.
+  const atCap = 'y'.repeat(SUBAGENT_PRESET_INSTRUCTION_MAX_CHARS);
+  const composed = buildAgentSystemPrompt(LOCAL_READ_AGENT_DEFINITION, { procedure: atCap });
+  assert.ok(composed.includes(`## Working procedure\n${atCap}`));
+  assert.equal(composed.includes('## Role'), false);
 });
