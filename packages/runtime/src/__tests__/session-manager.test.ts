@@ -2837,6 +2837,82 @@ describe('SessionManager child-session runtime primitive', () => {
     while (!(await parentTurn.next()).done) {}
   });
 
+  test('freezes the preset role instructions into the child prompt snapshot', async () => {
+    const store = new MemorySessionStore();
+    const runStore = new MemoryAgentRunStore();
+    const backends = new BackendRegistry();
+    const contexts: BackendFactoryContext[] = [];
+    backends.register(
+      'ai-sdk',
+      (ctx) => {
+        contexts.push(ctx);
+        return new TestBackend(ctx);
+      },
+    );
+    const preset = {
+      id: 'reviewer',
+      name: 'Reviewer',
+      description: 'Reviews diffs',
+      profile: 'local_read' as const,
+      connectionSlug: 'worker-connection',
+      model: 'worker-model',
+      instructions: {
+        responsibilities: 'Review diffs for correctness.',
+        constraints: 'Never edit files.',
+      },
+      enabled: true,
+    };
+    const manager = new SessionManager({
+      store,
+      runStore,
+      runtimeEventStore: runStore,
+      backends,
+      childTools: [testTool('Read'), testTool('Glob'), testTool('Grep')],
+      subagentCatalog: {
+        list: async () => [{ ...preset, availability: { status: 'available' as const } }],
+        resolve: async (id) => {
+          if (id !== preset.id) throw new Error('unknown preset');
+          return { ...preset, connectionId: '33333333-3333-4333-8333-333333333333' };
+        },
+      },
+      newId: nextId(),
+      now: nextNow(150),
+    });
+    const parent = await manager.createSession(makeInput({ name: 'Instruction parent' }));
+    await drain(manager.sendMessage(parent.id, { turnId: 'parent-turn-role', text: 'delegate' }));
+    const [parentRun] = await runStore.listSessionInvocations(parent.id);
+    if (!parentRun) throw new Error('parent run was not recorded');
+
+    const result = await manager.spawnChildSession(parent.id, {
+      spawnedBy: {
+        parentRunId: parentRun.runId,
+        parentTurnId: parentRun.turnId,
+        toolCallId: 'tool-call-role',
+      },
+      agentProfile: LOCAL_READ_AGENT_PROFILE,
+      subagentId: preset.id,
+      prompt: 'review the diff',
+    });
+
+    const expected = [
+      LOCAL_READ_AGENT_DEFINITION.systemPrompt,
+      '',
+      'Standing instructions for this role, authored by the user.',
+    ].join('\n');
+    const child = await store.readHeader(result.childSessionId);
+    const frozen = child.subagentRuntime?.systemPrompt;
+    assert.ok(frozen);
+    // The platform prompt stays first and the role text follows it, all of it
+    // frozen into the snapshot rather than re-read at activation time.
+    assert.ok(frozen.startsWith(expected));
+    assert.ok(frozen.includes('## Role\nReview diffs for correctness.'));
+    assert.ok(frozen.includes('## Constraints\nNever edit files.'));
+    assert.equal(frozen.includes('## Output format'), false);
+    // The child is activated with exactly that frozen text.
+    const childContext = contexts.find((ctx) => ctx.sessionId === result.childSessionId);
+    assert.strictEqual(childContext?.systemPrompt, frozen);
+  });
+
   test('tells callers to retry when a subagent preset profile changes during spawn', async () => {
     const manager = new SessionManager({
       store: new MemorySessionStore(),

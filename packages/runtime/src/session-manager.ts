@@ -221,6 +221,7 @@ import { projectAgentGraphRecords } from './stream-graph-projection.js';
 import { buildStatusPatch, type RunLifecycleStatus } from './session-projection-helpers.js';
 import {
   assertAgentDefinitionRunnable,
+  buildAgentSystemPrompt,
   buildToolsForAgentDefinition,
   listBuiltinAgentDefinitions,
   requireBuiltinAgentDefinition,
@@ -2760,6 +2761,9 @@ export class SessionManager {
       : await this.resolveChildToolNames(input.source.sessionId, parentHeader, definition);
     const childPermissionMode =
       parentHeader.permissionMode === 'bypass' ? 'bypass' : definition.permissionMode;
+    // Composed once so the fingerprint and the stored snapshot can never
+    // describe different prompts.
+    const systemPrompt = buildAgentSystemPrompt(definition, resolvedPreset?.instructions);
 
     const initialTurnId = this.deps.newId();
     const initialRunId = this.deps.newId();
@@ -2784,7 +2788,7 @@ export class SessionManager {
         permissionMode: childPermissionMode,
         toolNames: resolvedToolNames,
         categoryPolicy: {},
-        systemPrompt: definition.systemPrompt,
+        systemPrompt,
         executorId: executorId ?? null,
         ...(resolvedPreset
           ? {
@@ -2870,7 +2874,7 @@ export class SessionManager {
           agentName: resolvedPreset?.name ?? definition.name,
           profile: definition.profile,
           ...(resolvedPreset ? { presetId: resolvedPreset.id } : {}),
-          systemPrompt: definition.systemPrompt,
+          systemPrompt,
           toolNames: resolvedToolNames,
           categoryPolicy: {},
         },
@@ -3357,6 +3361,7 @@ export class SessionManager {
     const resolvedToolNames = executorId
       ? []
       : await this.resolveChildToolNames(parentSessionId, parentHeader, definition);
+    const systemPrompt = buildAgentSystemPrompt(definition, input.resolvedPreset?.instructions);
 
     const proposedTurnId = input.turnId ?? this.deps.newId();
     const proposedRunId = input.runId ?? this.deps.newId();
@@ -3411,7 +3416,7 @@ export class SessionManager {
           agentName: input.resolvedPreset?.name ?? definition.name,
           profile: definition.profile,
           ...(input.resolvedPreset ? { presetId: input.resolvedPreset.id } : {}),
-          systemPrompt: definition.systemPrompt,
+          systemPrompt,
           toolNames: resolvedToolNames,
           categoryPolicy: {},
         },

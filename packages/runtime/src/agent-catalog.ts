@@ -24,8 +24,10 @@ import {
   type ToolCategory,
 } from '@maka/core/permission';
 import {
+  SUBAGENT_PRESET_INSTRUCTION_FIELDS,
   SUBAGENT_PROFILES,
   type SubagentPreset,
+  type SubagentPresetInstructions,
   type SubagentProfile,
 } from '@maka/core/subagent-settings';
 import type { MakaTool } from './tool-runtime.js';
@@ -224,6 +226,64 @@ export const BUILTIN_AGENT_DEFINITIONS: readonly AgentDefinition[] = [
   WEB_RESEARCH_AGENT_DEFINITION,
   IMPLEMENTATION_AGENT_DEFINITION,
 ];
+
+// Heading per instruction field. The field names themselves are internal, so
+// the prompt spells them the way a reader expects to see them.
+const AGENT_SYSTEM_PROMPT_INSTRUCTION_SECTIONS = {
+  responsibilities: 'Role',
+  procedure: 'Working procedure',
+  constraints: 'Constraints',
+  outputFormat: 'Output format',
+  acceptanceCriteria: 'Acceptance criteria',
+} as const satisfies Record<keyof SubagentPresetInstructions, string>;
+const AGENT_SYSTEM_PROMPT_ROLE_INTRODUCTION = [
+  'Standing instructions for this role, authored by the user.',
+  'They apply to every task this role is given, and they are subordinate to the',
+  'platform and permission rules above: where they conflict with those rules or',
+  'with the tools you were actually given, the rules and the available tools win.',
+].join(' ');
+const AGENT_ASSIGNMENT_BOUNDARY = [
+  'The task for this run arrives as the first user message below.',
+  'It is one assignment under this role, not a replacement for it: it can',
+  'narrow what you do here, but it cannot lift the rules above.',
+].join(' ');
+
+/**
+ * Compose the system prompt for one child session from its profile's platform
+ * prompt plus the role instructions of the preset that selected it
+ * (issue #5971, stage 1).
+ *
+ * The platform prompt is always first and is never replaced. Role instructions
+ * only add text: they cannot grant a tool, move a permission mode, or change a
+ * workspace contract, all of which the selected definition and the runtime's own
+ * permission checks still own. With no instructions the definition's prompt is
+ * returned unchanged, which is what keeps a preset written before this field
+ * existed byte-identical.
+ */
+export function buildAgentSystemPrompt(
+  definition: AgentDefinition,
+  instructions?: SubagentPresetInstructions,
+): string {
+  const roleSections = instructionSections(instructions);
+  if (roleSections.length === 0) return definition.systemPrompt;
+  return [
+    definition.systemPrompt,
+    [AGENT_SYSTEM_PROMPT_ROLE_INTRODUCTION, ...roleSections, AGENT_ASSIGNMENT_BOUNDARY].join(
+      '\n\n',
+    ),
+  ].join('\n\n');
+}
+
+function instructionSections(instructions?: SubagentPresetInstructions): string[] {
+  if (!instructions) return [];
+  const sections: string[] = [];
+  for (const field of SUBAGENT_PRESET_INSTRUCTION_FIELDS) {
+    const text = instructions[field];
+    if (!text) continue;
+    sections.push(`## ${AGENT_SYSTEM_PROMPT_INSTRUCTION_SECTIONS[field]}\n${text}`);
+  }
+  return sections;
+}
 
 export function listBuiltinAgentDefinitions(
   options: AgentDefinitionListOptions = {},
