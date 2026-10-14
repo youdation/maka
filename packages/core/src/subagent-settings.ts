@@ -35,16 +35,19 @@ export const SUBAGENT_PRESET_DESCRIPTION_MAX_CHARS = 1_000;
 // editor pre-clamps, because Astryx's TextArea `maxLength` only styles its
 // counter and the store would cut the text without saying so.
 export const SUBAGENT_PRESET_INSTRUCTION_MAX_CHARS = 8_000;
-// `satisfies` rather than `as const` on the element type: the loop below has to
-// index the instruction object with these names, and a literal union would make
-// that a union of assignments instead of a `string` one.
-export const SUBAGENT_PRESET_INSTRUCTION_FIELDS = [
-  'responsibilities',
-  'procedure',
-  'constraints',
-  'outputFormat',
-  'acceptanceCriteria',
-] as const satisfies readonly (keyof SubagentPresetInstructions)[];
+// Every instruction field, as the record normalization iterates. `satisfies
+// Record<keyof SubagentPresetInstructions, string>` makes a new interface field
+// a compile error here rather than a value that persists as `undefined` and is
+// silently dropped on the way back out.
+const SUBAGENT_PRESET_INSTRUCTION_FIELD_SET = {
+  responsibilities: 'responsibilities',
+  procedure: 'procedure',
+  constraints: 'constraints',
+  outputFormat: 'outputFormat',
+  acceptanceCriteria: 'acceptanceCriteria',
+} as const satisfies Record<keyof SubagentPresetInstructions, string>;
+export const SUBAGENT_PRESET_INSTRUCTION_FIELDS: readonly (keyof SubagentPresetInstructions)[] =
+  Object.keys(SUBAGENT_PRESET_INSTRUCTION_FIELD_SET) as (keyof SubagentPresetInstructions)[];
 const SAFE_SUBAGENT_PRESET_ID = /^[A-Za-z0-9._:-]+$/;
 // Role text is prose, so newlines and tabs are legal. Every other control
 // character is stripped rather than rejected: a stray escape pasted from a
