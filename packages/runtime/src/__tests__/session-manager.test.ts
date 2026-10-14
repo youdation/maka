@@ -2842,11 +2842,12 @@ describe('SessionManager child-session runtime primitive', () => {
     const runStore = new MemoryAgentRunStore();
     const backends = new BackendRegistry();
     const contexts: BackendFactoryContext[] = [];
+    const parentGate = makeGate();
     backends.register(
       'ai-sdk',
       (ctx) => {
         contexts.push(ctx);
-        return new TestBackend(ctx);
+        return new TestBackend(ctx, ctx.header.subagentRuntime ? undefined : parentGate);
       },
     );
     const preset = {
@@ -2879,7 +2880,10 @@ describe('SessionManager child-session runtime primitive', () => {
       now: nextNow(150),
     });
     const parent = await manager.createSession(makeInput({ name: 'Instruction parent' }));
-    await drain(manager.sendMessage(parent.id, { turnId: 'parent-turn-role', text: 'delegate' }));
+    const parentTurn = manager
+      .sendMessage(parent.id, { turnId: 'parent-turn-role', text: 'delegate' })
+      [Symbol.asyncIterator]();
+    await parentTurn.next();
     const [parentRun] = await runStore.listSessionInvocations(parent.id);
     if (!parentRun) throw new Error('parent run was not recorded');
 
@@ -2911,6 +2915,9 @@ describe('SessionManager child-session runtime primitive', () => {
     // The child is activated with exactly that frozen text.
     const childContext = contexts.find((ctx) => ctx.sessionId === result.childSessionId);
     assert.strictEqual(childContext?.systemPrompt, frozen);
+
+    parentGate.release();
+    while (!(await parentTurn.next()).done) {}
   });
 
   test('tells callers to retry when a subagent preset profile changes during spawn', async () => {
