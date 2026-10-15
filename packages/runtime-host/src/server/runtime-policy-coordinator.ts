@@ -57,6 +57,7 @@ import {
 } from '../protocol/index.js';
 import type { RuntimePolicyOperationHandlerMap } from './operation-dispatcher.js';
 import { buildHostAgentSettingsTools } from './agent-settings-tools.js';
+import { buildHostSubagentPresetTools } from './subagent-preset-tools.js';
 import { RuntimePolicyActivationGate } from './runtime-policy-activation-gate.js';
 
 type StoreQueryOutcome<T> =
@@ -121,10 +122,34 @@ export class HostRuntimePolicyCoordinator {
     private readonly validateMutation: RuntimePolicyMutationValidator = async () => {},
   ) {
     this.#stores = authenticateRuntimePolicyStoresWriter(stores);
+    const readPolicy = async () => requirePolicyQuery(await this.#queryPolicy());
     this.modelTools = buildHostAgentSettingsTools({
-      read: async () => requirePolicyQuery(await this.#queryPolicy()),
+      read: readPolicy,
       mutate: async (input) => requirePolicyMutation(await this.#mutatePolicy(input)),
     });
+    // The preset surface writes through the same admission path as every other
+    // policy mutation, so Host validation and the optimistic revision apply to
+    // it too. It builds its operation from the CURRENT snapshot because only it
+    // knows whether the preset already exists.
+    this.modelTools = [
+      ...this.modelTools,
+      ...buildHostSubagentPresetTools({
+        read: readPolicy,
+        mutate: async (buildOperation) => {
+          const current = await readPolicy();
+          const result = await this.#mutatePolicy({
+            expectedRevision: current.revision,
+            operation: buildOperation(current),
+          });
+          if (!result.ok) {
+            throw new RuntimePolicyStoreError('invalid_policy_input', result.error.message);
+          }
+          return result.result.kind === 'committed'
+            ? { kind: 'committed', revision: result.result.revision }
+            : result.result;
+        },
+      }),
+    ];
   }
 
   async #queryPolicy(): Promise<OperationOutcome<'runtime.policy.query'>> {

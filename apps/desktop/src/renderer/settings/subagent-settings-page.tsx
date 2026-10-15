@@ -37,8 +37,10 @@ import {
   MAX_SUBAGENT_PRESETS,
   SUBAGENT_PRESET_DESCRIPTION_MAX_CHARS,
   SUBAGENT_PRESET_ID_MAX_CHARS,
+  SUBAGENT_PRESET_INSTRUCTION_MAX_CHARS,
   SUBAGENT_PRESET_NAME_MAX_CHARS,
   type SubagentPreset,
+  type SubagentPresetInstructions,
   type SubagentProfile,
 } from '@maka/core/subagent-settings';
 import { type AppSettings, type UpdateAppSettingsResult } from '@maka/core/settings';
@@ -90,9 +92,38 @@ function leadingSpace(value: string): number {
 }
 
 /** The preset as the form holds it: `thinkingLevel` gains the Selector's ''. */
-type SubagentEditorDraft = Omit<SubagentPreset, 'thinkingLevel'> & {
+type SubagentEditorDraft = Omit<SubagentPreset, 'thinkingLevel' | 'instructions'> & {
   thinkingLevel: ThinkingLevel | '';
+  /**
+   * Every field is present as a string while editing: Astryx TextAreas are
+   * controlled, and an absent field would flip the input between controlled and
+   * uncontrolled. Empty strings are dropped again on submit.
+   */
+  instructions: Record<keyof SubagentPresetInstructions, string>;
 };
+
+const EMPTY_INSTRUCTIONS: Record<keyof SubagentPresetInstructions, string> = {
+  responsibilities: '',
+  procedure: '',
+  constraints: '',
+  outputFormat: '',
+  acceptanceCriteria: '',
+};
+
+/** Drop blank fields so a cleared textarea removes the key instead of storing "". */
+function draftInstructions(
+  draft: Record<keyof SubagentPresetInstructions, string>,
+): SubagentPresetInstructions | undefined {
+  const instructions: SubagentPresetInstructions = {};
+  for (const [field, text] of Object.entries(draft) as [
+    keyof SubagentPresetInstructions,
+    string,
+  ][]) {
+    const trimmed = text.trim();
+    if (trimmed.length > 0) instructions[field] = trimmed;
+  }
+  return Object.keys(instructions).length > 0 ? instructions : undefined;
+}
 
 export function SubagentSettingsPage(props: {
   settings: AppSettings;
@@ -366,6 +397,7 @@ function SubagentPresetEditor(props: {
     connectionSlug: props.preset?.connectionSlug ?? usableConnections[0]?.slug ?? '',
     model: props.preset?.model ?? initialModels[0]?.id ?? '',
     thinkingLevel: props.preset?.thinkingLevel ?? '',
+    instructions: { ...EMPTY_INSTRUCTIONS, ...props.preset?.instructions },
     enabled: props.preset?.enabled ?? true,
   }));
   const [idWasEdited, setIdWasEdited] = useState(false);
@@ -440,6 +472,16 @@ function SubagentPresetEditor(props: {
     setDraft((current) => nextSubagentDraftForName(current, name, idWasEdited, existingIds));
   }
 
+  function updateInstructions(field: keyof SubagentPresetInstructions, value: string): void {
+    // Clamped here because the store TRUNCATES an over-long field: an error
+    // after the fact would describe text the user can no longer see.
+    const text = value.slice(0, SUBAGENT_PRESET_INSTRUCTION_MAX_CHARS + leadingSpace(value));
+    setDraft((current) => ({
+      ...current,
+      instructions: { ...current.instructions, [field]: text },
+    }));
+  }
+
   function selectConnection(connectionSlug: string): void {
     const connection = usableConnections.find((candidate) => candidate.slug === connectionSlug);
     const models = connection ? offerableCatalogEntries(connection) : [];
@@ -454,6 +496,7 @@ function SubagentPresetEditor(props: {
   async function submit(): Promise<void> {
     setSubmitted(true);
     if (!canSave) return;
+    const instructions = draftInstructions(draft.instructions);
     await props.onSave({
       // An existing preset's id comes from the preset, never from the draft:
       // session history and the main agent's routing key on it, and the field
@@ -469,6 +512,9 @@ function SubagentPresetEditor(props: {
       ...(draft.thinkingLevel && thinkingLevels.includes(draft.thinkingLevel)
         ? { thinkingLevel: draft.thinkingLevel }
         : {}),
+      // Absent, not empty: a preset with no instructions must not store a block
+      // of blank fields that later reads would have to interpret.
+      ...(instructions ? { instructions } : {}),
       enabled: draft.enabled,
     });
   }
@@ -543,6 +589,53 @@ function SubagentPresetEditor(props: {
             />
           </SettingsField>
         )}
+      </SettingsSection>
+
+      {/* Standing role instructions. Prose the user writes for the child agent,
+          so full-width fields — and one section per concern rather than one
+          blob, because the store caps each field separately. */}
+      <SettingsSection
+        title={copy.instructions.group}
+        description={copy.instructions.groupHelp}
+      >
+        <SettingsField>
+          <Banner status="info" title={copy.instructions.boundary} />
+        </SettingsField>
+        <InstructionField
+          label={copy.instructions.responsibilities}
+          placeholder={copy.instructions.responsibilitiesPlaceholder}
+          value={draft.instructions.responsibilities}
+          isDisabled={props.isSaving}
+          onChange={(text) => updateInstructions('responsibilities', text)}
+        />
+        <InstructionField
+          label={copy.instructions.procedure}
+          placeholder={copy.instructions.procedurePlaceholder}
+          value={draft.instructions.procedure}
+          isDisabled={props.isSaving}
+          onChange={(text) => updateInstructions('procedure', text)}
+        />
+        <InstructionField
+          label={copy.instructions.constraints}
+          placeholder={copy.instructions.constraintsPlaceholder}
+          value={draft.instructions.constraints}
+          isDisabled={props.isSaving}
+          onChange={(text) => updateInstructions('constraints', text)}
+        />
+        <InstructionField
+          label={copy.instructions.outputFormat}
+          placeholder={copy.instructions.outputFormatPlaceholder}
+          value={draft.instructions.outputFormat}
+          isDisabled={props.isSaving}
+          onChange={(text) => updateInstructions('outputFormat', text)}
+        />
+        <InstructionField
+          label={copy.instructions.acceptanceCriteria}
+          placeholder={copy.instructions.acceptanceCriteriaPlaceholder}
+          value={draft.instructions.acceptanceCriteria}
+          isDisabled={props.isSaving}
+          onChange={(text) => updateInstructions('acceptanceCriteria', text)}
+        />
       </SettingsSection>
 
       <SettingsSection title={copy.editor.groupRoute} description={copy.editor.groupRouteHelp}>
@@ -689,5 +782,30 @@ function SubagentPresetEditor(props: {
         </SettingsSection>
       ) : null}
     </SettingsPage>
+  );
+}
+
+/** One instruction textarea. Full width, because it is prose the user writes. */
+function InstructionField(props: {
+  label: string;
+  placeholder: string;
+  value: string;
+  isDisabled: boolean;
+  onChange(value: string): void;
+}) {
+  return (
+    <SettingsField>
+      <TextArea
+        label={props.label}
+        value={props.value}
+        placeholder={props.placeholder}
+        rows={3}
+        // The counter is Astryx's; the cap is ours, because `maxLength` only
+        // styles the counter while the store truncates silently.
+        maxLength={SUBAGENT_PRESET_INSTRUCTION_MAX_CHARS}
+        isDisabled={props.isDisabled}
+        onChange={props.onChange}
+      />
+    </SettingsField>
   );
 }

@@ -85,6 +85,27 @@ export type SubagentSettingsCopy = {
     save: string;
     saving: string;
   };
+  /**
+   * Standing role instructions (issue #5971). Separate from `description`,
+   * which only helps the main agent pick a preset: these reach the child agent
+   * and are capped per field by the store.
+   */
+  instructions: {
+    group: string;
+    groupHelp: string;
+    responsibilities: string;
+    responsibilitiesPlaceholder: string;
+    procedure: string;
+    procedurePlaceholder: string;
+    constraints: string;
+    constraintsPlaceholder: string;
+    outputFormat: string;
+    outputFormatPlaceholder: string;
+    acceptanceCriteria: string;
+    acceptanceCriteriaPlaceholder: string;
+    /** Explains that these are text, not a permission change. */
+    boundary: string;
+  };
   remove: {
     title(name: string): string;
     description: string;
@@ -122,7 +143,7 @@ const SETTINGS_SUBAGENTS_COPY_BY_LOCALE = {
     editor: {
       backToList: '返回子 Agent 列表',
       createSubtitle: '创建一个可由主 Agent 自动选择的模型配置。',
-      editSubtitle: '修改适用场景、能力边界和模型路由。',
+      editSubtitle: '修改适用场景、工作指令和模型路由。',
       groupPurpose: '用途',
       groupPurposeHelp: '主 Agent 主要根据这里的名称和适用场景挑选配置。',
       groupRoute: '能力与模型',
@@ -156,6 +177,21 @@ const SETTINGS_SUBAGENTS_COPY_BY_LOCALE = {
       create: '创建',
       save: '保存',
       saving: '保存中…',
+    },
+    instructions: {
+      group: '工作指令',
+      groupHelp: '这些内容会随每次派发传给子 Agent。它们只增加工作要求，不会扩大工具、文件或网络权限，也无法改变能力 Profile 的边界。',
+      responsibilities: '工作职能',
+      responsibilitiesPlaceholder: '审查改动是否正确，重点关注边界条件和错误处理',
+      procedure: '执行步骤',
+      procedurePlaceholder: '1. 先读改动本身\n2. 再读相关测试\n3. 最后给出结论',
+      constraints: '行为边界',
+      constraintsPlaceholder: '不要修改任何文件，只给出结论',
+      outputFormat: '输出格式',
+      outputFormatPlaceholder: '按文件列出问题，每条包含位置、原因和建议',
+      acceptanceCriteria: '验收标准',
+      acceptanceCriteriaPlaceholder: '每条结论都能指向具体的文件和行号',
+      boundary: '子 Agent 实际能用的工具和权限仍由上面的能力 Profile 决定，这里的文字不会改变它们。',
     },
     remove: {
       title: (name) => `删除“${name}”？`,
@@ -204,7 +240,7 @@ const SETTINGS_SUBAGENTS_COPY_BY_LOCALE = {
     editor: {
       backToList: '返回子 Agent 列表',
       createSubtitle: '建立一個可由主 Agent 自動選擇的模型設定。',
-      editSubtitle: '修改適用場景、能力邊界和模型路由。',
+      editSubtitle: '修改適用場景、工作指令和模型路由。',
       groupPurpose: '用途',
       groupPurposeHelp: '主 Agent 主要根據這裡的名稱和適用場景挑選設定。',
       groupRoute: '能力與模型',
@@ -238,6 +274,21 @@ const SETTINGS_SUBAGENTS_COPY_BY_LOCALE = {
       create: '建立',
       save: '儲存',
       saving: '儲存中…',
+    },
+    instructions: {
+      group: '工作指令',
+      groupHelp: '這些內容會隨每次派發傳給子 Agent。它們只增加工作要求，不會擴大工具、檔案或網路權限，也無法改變能力 Profile 的邊界。',
+      responsibilities: '工作職能',
+      responsibilitiesPlaceholder: '審查改動是否正確，重點關注邊界條件和錯誤處理',
+      procedure: '執行步驟',
+      procedurePlaceholder: '1. 先讀改動本身\n2. 再讀相關測試\n3. 最後給出結論',
+      constraints: '行為邊界',
+      constraintsPlaceholder: '不要修改任何檔案，只給出結論',
+      outputFormat: '輸出格式',
+      outputFormatPlaceholder: '按檔案列出問題，每條包含位置、原因和建議',
+      acceptanceCriteria: '驗收標準',
+      acceptanceCriteriaPlaceholder: '每條結論都能指向具體的檔案和行號',
+      boundary: '子 Agent 實際能用的工具和權限仍由上面的能力 Profile 決定，這裡的文字不會改變它們。',
     },
     remove: {
       title: (name) => `刪除“${name}”？`,
@@ -286,7 +337,7 @@ const SETTINGS_SUBAGENTS_COPY_BY_LOCALE = {
     editor: {
       backToList: 'Back to subagents',
       createSubtitle: 'Create a model preset that the main agent can select automatically.',
-      editSubtitle: 'Change its usage guidance, capability boundary, and model route.',
+      editSubtitle: 'Change its usage guidance, work instructions, and model route.',
       groupPurpose: 'Purpose',
       groupPurposeHelp: 'The main agent selects a preset primarily from the name and guidance here.',
       groupRoute: 'Capability and model',
@@ -320,6 +371,21 @@ const SETTINGS_SUBAGENTS_COPY_BY_LOCALE = {
       create: 'Create',
       save: 'Save',
       saving: 'Saving…',
+    },
+    instructions: {
+      group: 'Work instructions',
+      groupHelp: 'These reach the child agent on every delegation. They add requirements only: they never widen tool, file, or network access, and they cannot change the capability profile boundary.',
+      responsibilities: 'Responsibilities',
+      responsibilitiesPlaceholder: 'Review the change for correctness, especially edge cases and error handling',
+      procedure: 'Procedure',
+      procedurePlaceholder: '1. Read the change itself\n2. Then read the tests it touches\n3. Then state the verdict',
+      constraints: 'Constraints',
+      constraintsPlaceholder: 'Never edit files; report findings only',
+      outputFormat: 'Output format',
+      outputFormatPlaceholder: 'List findings per file, each with location, reason, and a suggested fix',
+      acceptanceCriteria: 'Acceptance criteria',
+      acceptanceCriteriaPlaceholder: 'Every finding names a specific file and line',
+      boundary: 'The tools and permissions the child actually has are still set by the capability profile above; this text does not change them.',
     },
     remove: {
       title: (name) => `Remove “${name}”?`,

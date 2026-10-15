@@ -30,6 +30,7 @@ import type {
   CredentialStatus,
   RuntimePolicy,
 } from "@maka/core/runtime-policy";
+import type { SubagentPreset } from '@maka/core/subagent-settings';
 import { SENSITIVE_PLACEHOLDER } from "@maka/core/settings/network-settings";
 import type {
   TestProxyInput,
@@ -446,12 +447,58 @@ async function applyHostPatchWithoutLane(
     }
   }
   if (patch.subagents) {
-    await client.updateRuntimePolicy(() => ({
-      kind: "set_subagents",
-      value: patch.subagents!,
-    }));
+    // The editor sends the whole list, but applying it as one
+    // `set_subagents` write would clobber a preset the conversation tools
+    // changed while this editor was open. Diffing against the policy we are
+    // about to write against turns that into one operation per affected preset,
+    // and `updateRuntimePolicyIf` re-reads on retry so the diff is re-derived
+    // instead of re-sent.
+    const next = patch.subagents.presets;
+    await client.updateRuntimePolicy((policy) => {
+      const operations = subagentPresetPatchOperations(policy.subagents.presets, next);
+      if (operations.length !== 1) {
+        throw new Error(
+          `Expected one subagent preset change, derived ${operations.length}`,
+        );
+      }
+      return { kind: "patch_subagent_presets", value: operations[0]! };
+    });
   }
   return skippedCredentials;
+}
+
+type SubagentPresetPatchOperation =
+  | { op: "upsert"; preset: SubagentPreset }
+  | { op: "delete"; presetId: string };
+
+/**
+ * Derive the preset-scoped writes that turn `current` into `next`.
+ *
+ * The settings surface writes one preset at a time (an editor save, a row
+ * toggle, or a delete), so exactly one operation is expected; more than one
+ * means the caller sent a list it did not base on the current policy, and
+ * guessing which change was intended would be worse than refusing.
+ */
+function subagentPresetPatchOperations(
+  current: readonly SubagentPreset[],
+  next: readonly SubagentPreset[],
+): SubagentPresetPatchOperation[] {
+  const operations: SubagentPresetPatchOperation[] = [];
+  const nextById = new Map(next.map((preset) => [preset.id, preset]));
+  for (const preset of next) {
+    const before = current.find((candidate) => candidate.id === preset.id);
+    if (!before || !sameSubagentPreset(before, preset)) {
+      operations.push({ op: "upsert", preset });
+    }
+  }
+  for (const preset of current) {
+    if (!nextById.has(preset.id)) operations.push({ op: "delete", presetId: preset.id });
+  }
+  return operations;
+}
+
+function sameSubagentPreset(left: SubagentPreset, right: SubagentPreset): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 async function updateNetworkProxy(
